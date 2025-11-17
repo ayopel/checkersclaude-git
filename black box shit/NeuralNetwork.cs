@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Linq;
 
 namespace checkersclaude
@@ -283,5 +284,92 @@ namespace checkersclaude
 
             return weights;
         }
+        public void SaveToFile(string filepath)
+        {
+            using (BinaryWriter writer = new BinaryWriter(File.Open(filepath, FileMode.Create)))
+            {
+                // Write architecture
+                writer.Write(inputSize);
+                writer.Write(hiddenSize1);
+                writer.Write(hiddenSize2);
+                writer.Write(outputSize);
+
+                WriteMatrix(writer, weightsInputHidden1);
+                WriteArray(writer, biasHidden1);
+
+                WriteMatrix(writer, weightsHidden1Hidden2);
+                WriteArray(writer, biasHidden2);
+
+                WriteMatrix(writer, weightsHidden2Output);
+                WriteArray(writer, biasOutput);
+            }
+        }
+
+        public static NeuralNetwork LoadFromFile(string filepath)
+        {
+            using (BinaryReader reader = new BinaryReader(File.Open(filepath, FileMode.Open)))
+            {
+                int input = reader.ReadInt32();
+                int h1 = reader.ReadInt32();
+                int h2 = reader.ReadInt32();
+                int output = reader.ReadInt32();
+
+                NeuralNetwork net = new NeuralNetwork(input, h1, output);
+
+                ReadMatrix(reader, net.weightsInputHidden1);
+                ReadArray(reader, net.biasHidden1);
+
+                ReadMatrix(reader, net.weightsHidden1Hidden2);
+                ReadArray(reader, net.biasHidden2);
+
+                ReadMatrix(reader, net.weightsHidden2Output);
+                ReadArray(reader, net.biasOutput);
+
+                return net;
+            }
+        }
+
+        private static void WriteMatrix(BinaryWriter writer, double[,] matrix)
+        {
+            int rows = matrix.GetLength(0);
+            int cols = matrix.GetLength(1);
+            writer.Write(rows);
+            writer.Write(cols);
+
+            for (int i = 0; i < rows; i++)
+                for (int j = 0; j < cols; j++)
+                    writer.Write(matrix[i, j]);
+        }
+
+        private static void WriteArray(BinaryWriter writer, double[] array)
+        {
+            writer.Write(array.Length);
+            for (int i = 0; i < array.Length; i++)
+                writer.Write(array[i]);
+        }
+
+        private static void ReadMatrix(BinaryReader reader, double[,] matrix)
+        {
+            int rows = reader.ReadInt32();
+            int cols = reader.ReadInt32();
+
+            if (rows != matrix.GetLength(0) || cols != matrix.GetLength(1))
+                throw new Exception("Weight matrix size mismatch in saved AI file!");
+
+            for (int i = 0; i < rows; i++)
+                for (int j = 0; j < cols; j++)
+                    matrix[i, j] = reader.ReadDouble();
+        }
+
+        private static void ReadArray(BinaryReader reader, double[] array)
+        {
+            int length = reader.ReadInt32();
+            if (length != array.Length)
+                throw new Exception("Bias array size mismatch in saved AI file!");
+
+            for (int i = 0; i < array.Length; i++)
+                array[i] = reader.ReadDouble();
+        }
+
     }
 }

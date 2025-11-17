@@ -7,12 +7,8 @@ namespace checkersclaude
     {
         private const int BoardSize = 8;
         private Piece[,] squares;
+        public Board() : this(true) { }
 
-        public Board()
-        {
-            squares = new Piece[BoardSize, BoardSize];
-            InitializeBoard();
-        }
 
         private void InitializeBoard()
         {
@@ -90,6 +86,33 @@ namespace checkersclaude
         {
             return BoardSize;
         }
+        public Board(bool initialize)
+        {
+            squares = new Piece[BoardSize, BoardSize];
+            if (initialize)
+                InitializeBoard();
+        }
+
+        public Board Clone()
+        {
+            Board copy = new Board(false);
+            for (int row = 0; row < BoardSize; row++)
+            {
+                for (int col = 0; col < BoardSize; col++)
+                {
+                    Piece p = squares[row, col];
+                    if (p != null)
+                    {
+                        Piece newPiece = new Piece(p.Color, new Position(row, col));
+                        newPiece.Type = p.Type; // Set King or Regular type
+                        copy.squares[row, col] = newPiece;
+                    }
+                }
+            }
+            return copy;
+        }
+
+
 
         // =======================
         // Apply a move (normal or multi-jump)
@@ -126,6 +149,7 @@ namespace checkersclaude
                     piece.Type = PieceType.King;
                 }
             }
+
         }
     }
 }

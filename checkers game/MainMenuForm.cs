@@ -169,7 +169,7 @@ namespace checkersclaude
             try
             {
                 NeuralNetwork brain = NeuralNetwork.LoadFromFile(AI_FILE);
-                return new Player(brain, PieceColor.Black);
+                return new Player(brain);
             }
             catch (Exception ex)
             {

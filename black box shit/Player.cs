@@ -8,6 +8,7 @@ namespace checkersclaude
     {
         public NeuralNetwork Brain { get; private set; }
         public double Fitness { get; set; }
+        private static Random rng = new Random();
 
         public int Wins { get; set; }
         public int Losses { get; set; }
@@ -103,25 +104,26 @@ namespace checkersclaude
                 if (willBeKing)
                     KingsMade++;
             }
+            // 5% random exploration
+            if (rng.NextDouble() < 0.05)
+                return validMoves[rng.Next(validMoves.Count)];
 
             return bestMove;
         }
 
         private double EvaluateMove(Board board, Move move, PieceColor color)
         {
-            // Get board state after move
-            double[] boardState = GetBoardStateAfterMove(board, move, color);
+            Board sim = board.Clone();
+            sim.ApplyMove(move);
 
-            // Get neural network evaluation
-            double[] output = Brain.FeedForward(boardState);
-            double neuralScore = output[0];
+            double[] state = EncodeBoard(sim, color);
+            double neuralScore = Brain.FeedForward(state)[0];
 
-            // Add heuristic bonuses for better decision making
             double heuristicScore = CalculateHeuristicScore(board, move, color);
 
-            // Combine neural network and heuristic (70% neural, 30% heuristic)
-            return neuralScore * 0.7 + heuristicScore * 0.3;
+            return neuralScore * 0.9 + heuristicScore * 0.1;
         }
+
 
         private double CalculateHeuristicScore(Board board, Move move, PieceColor color)
         {
@@ -174,83 +176,78 @@ namespace checkersclaude
             return score;
         }
 
-        private double[] GetBoardStateAfterMove(Board board, Move move, PieceColor color)
+        private double[] EncodeBoard(Board board, PieceColor color)
         {
             double[] state = new double[InputSize];
             int index = 0;
-
-            Piece movingPiece = board.GetPiece(move.From);
-            if (movingPiece == null)
-                return state;
 
             for (int row = 0; row < 8; row++)
             {
                 for (int col = 0; col < 8; col++)
                 {
-                    if ((row + col) % 2 == 0) continue; // Skip light squares
+                    if ((row + col) % 2 == 0) continue;
 
-                    Position pos = new Position(row, col);
-                    Piece piece = board.GetPiece(pos);
+                    Piece piece = board.GetPiece(new Position(row, col));
 
-                    // Simulate the move
-                    if (pos.Equals(move.From))
-                        piece = null;
-                    else if (pos.Equals(move.To))
-                        piece = movingPiece;
-                    else if (move.IsJump && move.JumpedPositions != null && move.JumpedPositions.Contains(pos))
-                        piece = null;
-
-                    // Enhanced encoding: distinguish regular pieces and kings
                     if (piece == null)
-                        state[index] = 0;
+                        state[index++] = 0;
                     else if (piece.Color == color)
-                        state[index] = piece.Type == PieceType.King ? 1.0 : 0.5;
+                        state[index++] = piece.Type == PieceType.King ? 1.0 : 0.5;
                     else
-                        state[index] = piece.Type == PieceType.King ? -1.0 : -0.5;
-
-                    index++;
+                        state[index++] = piece.Type == PieceType.King ? -1.0 : -0.5;
                 }
             }
 
             return state;
         }
 
+
         public void CalculateFitness()
         {
-            // Enhanced multi-factor fitness calculation
-            double winBonus = Wins * 200;
-            double lossPenalty = Losses * 80;
-            double drawBonus = Draws * 50;
-
-            double captureBonus = PiecesCaptured * 15;
-            double captureKingBonus = KingsCaptured * 40;
-            double kingsMadeBonus = KingsMade * 25;
-
-            double lossPiecePenalty = PiecesLost * 15;
-            double lostKingPenalty = KingsLost * 40;
-
-            // Efficiency bonuses
-            double moveEfficiency = TotalMoves > 0 ? (PiecesCaptured * 150.0 / TotalMoves) : 0;
-            double avgQualityBonus = TotalMoves > 0 ? (AverageMoveQuality / TotalMoves) * 20 : 0;
-
-            // Win rate bonus
+            // Base win/loss/draw
+            double fitness = 0;
             int totalGames = Wins + Losses + Draws;
-            double winRate = totalGames > 0 ? (double)Wins / totalGames : 0;
-            double winRateBonus = winRate * 100;
 
-            // Penalize extremely long games (stalling)
-            double movePenalty = TotalMoves > 1000 ? (TotalMoves - 1000) * 0.1 : 0;
+            if (totalGames == 0)
+            {
+                Fitness = 1; // minimal baseline
+                return;
+            }
 
-            Fitness = winBonus - lossPenalty + drawBonus +
-                     captureBonus + captureKingBonus + kingsMadeBonus -
-                     lossPiecePenalty - lostKingPenalty +
-                     moveEfficiency + avgQualityBonus + winRateBonus - movePenalty;
+            double winRate = (double)Wins / totalGames;
+            double lossRate = (double)Losses / totalGames;
+            double drawRate = (double)Draws / totalGames;
+
+            // Weighted scoring
+            fitness += winRate * 200;             // wins
+            fitness -= lossRate * 100;            // losses
+            fitness += drawRate * 50;             // draws
+
+            // Piece metrics
+            fitness += PiecesCaptured * 10;
+            fitness += KingsCaptured * 25;
+            fitness += KingsMade * 20;
+
+            fitness -= PiecesLost * 5;
+            fitness -= KingsLost * 20;
+
+            // Efficiency
+            if (TotalMoves > 0)
+            {
+                fitness += (PiecesCaptured / (double)TotalMoves) * 50;
+                fitness += (AverageMoveQuality / TotalMoves) * 30;
+            }
+
+            // Bonus for shorter games (avoiding stalling)
+            if (TotalMoves > 0)
+                fitness += Math.Max(0, 50 - TotalMoves * 0.05);
 
             // Add small random noise to break ties
-            Fitness += (new Random().NextDouble() - 0.5) * 10;
+            fitness += (new Random().NextDouble() - 0.5) * 5;
 
-            Fitness = Math.Max(0, Fitness);
+            Fitness = Math.Max(0, fitness);
         }
+
 
         public Player Clone()
         {
