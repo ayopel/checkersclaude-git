@@ -1,4 +1,15 @@
-﻿using System;
+﻿// ============================================================================
+// REPLACE YOUR ENTIRE AI/TrainingSystem.cs FILE WITH THIS CODE
+// ============================================================================
+// Instructions:
+// 1. Open your AI/TrainingSystem.cs file
+// 2. Select ALL content (Ctrl+A)
+// 3. Delete it
+// 4. Paste this entire file
+// 5. Save
+// ============================================================================
+
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -17,6 +28,10 @@ namespace checkersclaude
         private readonly double elitePercentage;
         private readonly Random random;
         private readonly TrainingConfig config;
+
+        private double historicalBestFitness = 0;
+        private int generationsWithoutImprovement = 0;
+        private const int DiversityResetThreshold = 20;
 
         public TrainingSystem(TrainingConfig config)
         {
@@ -52,7 +67,7 @@ namespace checkersclaude
                 player.Stats.Draws = 0;
             }
 
-            RunTournament();
+            RunImprovedTournament();
 
             foreach (var player in Population)
             {
@@ -61,16 +76,30 @@ namespace checkersclaude
 
             BestPlayer = Population.OrderByDescending(p => p.Brain.Fitness).First();
 
-            UpdateStats();
+            if (BestPlayer.Brain.Fitness > historicalBestFitness)
+            {
+                historicalBestFitness = BestPlayer.Brain.Fitness;
+                generationsWithoutImprovement = 0;
+            }
+            else
+            {
+                generationsWithoutImprovement++;
+            }
 
+            UpdateStats();
             EvolvePopulation();
+
+            if (generationsWithoutImprovement >= DiversityResetThreshold)
+            {
+                InjectDiversity();
+                generationsWithoutImprovement = 0;
+            }
         }
 
-        private void RunTournament()
+        private void RunImprovedTournament()
         {
             int gamesPerPair = config.GamesPerPair;
-
-            var matchups = GenerateMatchups();
+            var matchups = GenerateImprovedMatchups();
 
             if (config.UseParallelProcessing)
             {
@@ -98,20 +127,38 @@ namespace checkersclaude
             }
         }
 
-        private List<Tuple<AIPlayer, AIPlayer>> GenerateMatchups()
+        private List<Tuple<AIPlayer, AIPlayer>> GenerateImprovedMatchups()
         {
             var matchups = new List<Tuple<AIPlayer, AIPlayer>>();
 
+            var sortedPopulation = Generation > 1
+                ? Population.OrderByDescending(p => p.Brain.Fitness).ToList()
+                : Population.ToList();
+
             for (int i = 0; i < Population.Count; i++)
             {
-                int opponents = Math.Min(config.OpponentsPerPlayer, Population.Count - 1);
+                int opponentsPerPlayer = Math.Min(config.OpponentsPerPlayer, Population.Count - 1);
 
-                for (int j = 0; j < opponents; j++)
+                for (int j = 0; j < opponentsPerPlayer; j++)
                 {
-                    int opponentIndex = (i + j + 1) % Population.Count;
+                    int opponentIndex;
+
+                    if (random.NextDouble() < 0.6 && Generation > 1)
+                    {
+                        int minRank = Math.Max(0, i - 3);
+                        int maxRank = Math.Min(sortedPopulation.Count - 1, i + 3);
+                        opponentIndex = random.Next(minRank, maxRank + 1);
+                    }
+                    else
+                    {
+                        opponentIndex = random.Next(Population.Count);
+                    }
+
                     if (opponentIndex != i)
                     {
-                        matchups.Add(new Tuple<AIPlayer, AIPlayer>(Population[i], Population[opponentIndex]));
+                        matchups.Add(new Tuple<AIPlayer, AIPlayer>(
+                            Population[i],
+                            sortedPopulation[opponentIndex]));
                     }
                 }
             }
@@ -147,6 +194,17 @@ namespace checkersclaude
                 if (chosenMove.IsJump)
                 {
                     currentPlayer.Stats.PiecesCaptured += chosenMove.JumpedPositions.Count;
+
+                    foreach (var jumpedPos in chosenMove.JumpedPositions)
+                    {
+                        Piece captured = game.Board.GetPiece(jumpedPos);
+                        if (captured?.Type == PieceType.King)
+                        {
+                            currentPlayer.Stats.KingsCaptured++;
+                            AIPlayer opponent = currentPlayer == redPlayer ? blackPlayer : redPlayer;
+                            opponent.Stats.KingsLost++;
+                        }
+                    }
                 }
 
                 game.SelectPiece(chosenMove.From);
@@ -155,7 +213,14 @@ namespace checkersclaude
                 Piece movedPiece = game.Board.GetPiece(chosenMove.To);
                 if (movedPiece != null && movedPiece.Type == PieceType.King)
                 {
-                    currentPlayer.Stats.KingsMade++;
+                    if (chosenMove.From.Row != chosenMove.To.Row)
+                    {
+                        int kingRow = currentColor == PieceColor.Red ? 0 : 7;
+                        if (chosenMove.To.Row == kingRow)
+                        {
+                            currentPlayer.Stats.KingsMade++;
+                        }
+                    }
                 }
 
                 string boardState = game.Board.GetStateString();
@@ -218,7 +283,7 @@ namespace checkersclaude
 
             var sortedPopulation = Population.OrderByDescending(p => p.Brain.Fitness).ToList();
 
-            int eliteCount = Math.Max(1, (int)(populationSize * elitePercentage));
+            int eliteCount = Math.Max(2, (int)(populationSize * elitePercentage));
             for (int i = 0; i < eliteCount; i++)
             {
                 newGeneration.Add(sortedPopulation[i].Clone());
@@ -226,13 +291,13 @@ namespace checkersclaude
 
             while (newGeneration.Count < populationSize)
             {
-                AIPlayer parent1 = SelectParent(sortedPopulation);
-                AIPlayer parent2 = SelectParent(sortedPopulation);
+                AIPlayer parent1 = TournamentSelection(sortedPopulation, 5);
+                AIPlayer parent2 = TournamentSelection(sortedPopulation, 5);
 
                 AIPlayer child = parent1.Crossover(parent2, random);
 
-                double adaptiveMutationRate = mutationRate * (1.0 + (1.0 - parent1.Brain.Fitness / (BestPlayer.Brain.Fitness + 1.0)));
-                child.Mutate(Math.Min(adaptiveMutationRate, 0.5));
+                double adaptiveMutationRate = CalculateAdaptiveMutationRate(parent1, parent2);
+                child.Mutate(adaptiveMutationRate);
 
                 newGeneration.Add(child);
             }
@@ -240,9 +305,30 @@ namespace checkersclaude
             Population = newGeneration;
         }
 
-        private AIPlayer SelectParent(List<AIPlayer> sortedPopulation)
+        private double CalculateAdaptiveMutationRate(AIPlayer parent1, AIPlayer parent2)
         {
-            int tournamentSize = Math.Min(5, sortedPopulation.Count);
+            double rate = mutationRate;
+
+            double avgParentFitness = (parent1.Brain.Fitness + parent2.Brain.Fitness) / 2.0;
+            double bestFitness = BestPlayer?.Brain.Fitness ?? 1.0;
+
+            if (bestFitness > 0)
+            {
+                double relativeWeakness = 1.0 - (avgParentFitness / bestFitness);
+                rate += relativeWeakness * 0.15;
+            }
+
+            if (generationsWithoutImprovement > 5)
+            {
+                rate += 0.05 * (generationsWithoutImprovement / 5.0);
+            }
+
+            return Math.Min(rate, 0.5);
+        }
+
+        private AIPlayer TournamentSelection(List<AIPlayer> sortedPopulation, int tournamentSize)
+        {
+            tournamentSize = Math.Min(tournamentSize, sortedPopulation.Count);
             AIPlayer best = sortedPopulation[random.Next(sortedPopulation.Count)];
 
             for (int i = 1; i < tournamentSize; i++)
@@ -253,6 +339,25 @@ namespace checkersclaude
             }
 
             return best;
+        }
+
+        private void InjectDiversity()
+        {
+            int replaceCount = (int)(populationSize * 0.2);
+            var sortedPopulation = Population.OrderBy(p => p.Brain.Fitness).ToList();
+
+            for (int i = 0; i < replaceCount; i++)
+            {
+                sortedPopulation[i] = new AIPlayer(random);
+            }
+
+            int mutateStart = replaceCount;
+            int mutateEnd = mutateStart + replaceCount;
+
+            for (int i = mutateStart; i < mutateEnd && i < sortedPopulation.Count; i++)
+            {
+                sortedPopulation[i].Mutate(0.3);
+            }
         }
 
         private void UpdateStats()
@@ -267,11 +372,16 @@ namespace checkersclaude
 
         public string GetGenerationReport()
         {
+            string stagnationWarning = generationsWithoutImprovement > 10
+                ? $" ⚠ Stagnation: {generationsWithoutImprovement} gen"
+                : "";
+
             return $"Generation {CurrentStats.Generation} | " +
                    $"Best Fitness: {CurrentStats.BestFitness:F2} | " +
                    $"Avg Fitness: {CurrentStats.AverageFitness:F2} | " +
                    $"Best Win Rate: {CurrentStats.BestWinRate:P1} | " +
-                   $"Avg Win Rate: {CurrentStats.AverageWinRate:P1}";
+                   $"Avg Win Rate: {CurrentStats.AverageWinRate:P1}" +
+                   stagnationWarning;
         }
     }
 
