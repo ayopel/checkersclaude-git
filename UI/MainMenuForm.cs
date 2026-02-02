@@ -131,5 +131,17 @@ namespace checkers_neural_network
             trainingForm.Show();
             Hide();
         }
+
+        private void InitializeComponent()
+        {
+            this.SuspendLayout();
+            // 
+            // MainMenuForm
+            // 
+            this.ClientSize = new System.Drawing.Size(982, 421);
+            this.Name = "MainMenuForm";
+            this.ResumeLayout(false);
+
+        }
     }
 }

@@ -283,6 +283,18 @@ namespace checkers_neural_network
             AppendLog(isPaused ? "Training paused" : "Training resumed");
         }
 
+        private void InitializeComponent()
+        {
+            this.SuspendLayout();
+            // 
+            // TrainingForm
+            // 
+            this.ClientSize = new System.Drawing.Size(932, 424);
+            this.Name = "TrainingForm";
+            this.ResumeLayout(false);
+
+        }
+
         private void BtnStop_Click(object sender, EventArgs e)
         {
             isTraining = false;

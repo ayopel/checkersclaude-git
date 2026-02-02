@@ -519,7 +519,7 @@ namespace checkers_neural_network
             Brain.Mutate(mutationRate);
         }
 
-        public AIPlayer Crossover(AIPlayer partner, Random random)
+        public AIPlayer Crossover(AIPlayer partner, Random rnd)
         {
             DeepNeuralNetwork childBrain = Brain.Crossover(partner.Brain);
             return new AIPlayer(childBrain);
