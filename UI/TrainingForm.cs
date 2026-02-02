@@ -23,6 +23,9 @@ namespace checkers_neural_network
         private List<double> fitnessHistory = new List<double>();
         private List<double> avgFitnessHistory = new List<double>();
 
+        // ✨ NEW: Track stagnation count
+        private int stagnationCount = 0;
+
         public TrainingForm()
         {
             InitializeUI();
@@ -247,6 +250,7 @@ namespace checkers_neural_network
             isPaused = false;
             fitnessHistory.Clear();
             avgFitnessHistory.Clear();
+            stagnationCount = 0; // ✨ Reset stagnation counter
 
             SetControlsEnabled(false);
             progressBar.Maximum = (int)numGenerations.Value;
@@ -283,18 +287,6 @@ namespace checkers_neural_network
             AppendLog(isPaused ? "Training paused" : "Training resumed");
         }
 
-        private void InitializeComponent()
-        {
-            this.SuspendLayout();
-            // 
-            // TrainingForm
-            // 
-            this.ClientSize = new System.Drawing.Size(932, 424);
-            this.Name = "TrainingForm";
-            this.ResumeLayout(false);
-
-        }
-
         private void BtnStop_Click(object sender, EventArgs e)
         {
             isTraining = false;
@@ -307,6 +299,7 @@ namespace checkers_neural_network
         private void RunTraining(TrainingConfig config, int generations)
         {
             trainingSystem = new TrainingSystem(config);
+            double lastBestFitness = 0;
 
             for (int gen = 0; gen < generations && isTraining; gen++)
             {
@@ -320,12 +313,55 @@ namespace checkers_neural_network
                 trainingSystem.RunGeneration();
 
                 string report = trainingSystem.GetGenerationReport();
-                AppendLog(report);
+
+                // ✨ IMPROVED: Track stagnation
+                if (trainingSystem.CurrentStats.BestFitness <= lastBestFitness + 0.01)
+                {
+                    stagnationCount++;
+                }
+                else
+                {
+                    stagnationCount = 0;
+                }
+                lastBestFitness = trainingSystem.CurrentStats.BestFitness;
+
+                // ✨ IMPROVED: Color-coded log messages
+                if (report.Contains("Stagnation"))
+                {
+                    AppendLog(report, Color.Orange);
+                }
+                else if (stagnationCount >= 10)
+                {
+                    AppendLog(report + " ⚠ No improvement for 10 generations", Color.Yellow);
+                }
+                else if (gen > 0 && trainingSystem.CurrentStats.BestFitness > fitnessHistory[fitnessHistory.Count - 1])
+                {
+                    AppendLog(report + " ✓ Improved!", Color.LightGreen);
+                }
+                else
+                {
+                    AppendLog(report);
+                }
 
                 fitnessHistory.Add(trainingSystem.CurrentStats.BestFitness);
                 avgFitnessHistory.Add(trainingSystem.CurrentStats.AverageFitness);
 
                 UpdateChart();
+
+                // ✨ IMPROVED: Save checkpoint every 20 generations
+                if ((gen + 1) % 20 == 0 && trainingSystem.BestPlayer != null)
+                {
+                    try
+                    {
+                        string checkpointFile = $"checkpoint_gen{gen + 1}.dat";
+                        trainingSystem.BestPlayer.Brain.SaveToFile(checkpointFile);
+                        AppendLog($"Checkpoint saved: {checkpointFile}", Color.Cyan);
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"Checkpoint save failed: {ex.Message}", Color.Red);
+                    }
+                }
             }
 
             if (isTraining)
@@ -336,6 +372,7 @@ namespace checkers_neural_network
                 AppendLog("=== Training Complete ===");
                 AppendLog($"Best Fitness: {trainingSystem.BestPlayer.Brain.Fitness:F2}");
                 AppendLog($"Best Win Rate: {trainingSystem.BestPlayer.Stats.WinRate:P1}");
+                AppendLog($"Total Stagnation Events: {stagnationCount}");
                 AppendLog("AI saved successfully!");
 
                 Invoke((Action)(() =>
@@ -344,7 +381,8 @@ namespace checkers_neural_network
                         $"Training Complete!\n\n" +
                         $"Generations: {trainingSystem.Generation}\n" +
                         $"Best Fitness: {trainingSystem.BestPlayer.Brain.Fitness:F2}\n" +
-                        $"Best Win Rate: {trainingSystem.BestPlayer.Stats.WinRate:P1}\n\n" +
+                        $"Best Win Rate: {trainingSystem.BestPlayer.Stats.WinRate:P1}\n" +
+                        $"Stagnation Events: {stagnationCount}\n\n" +
                         $"AI saved and ready to play!",
                         "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }));
@@ -361,7 +399,7 @@ namespace checkers_neural_network
             }
             catch (Exception ex)
             {
-                AppendLog($"Error saving AI: {ex.Message}");
+                AppendLog($"Error saving AI: {ex.Message}", Color.Red);
             }
         }
 
@@ -377,15 +415,32 @@ namespace checkers_neural_network
             progressBar.Value = Math.Min(value, progressBar.Maximum);
         }
 
-        private void AppendLog(string message)
+        // ✨ IMPROVED: Support colored log messages
+        private void AppendLog(string message, Color? color = null)
         {
             if (txtLog.InvokeRequired)
             {
-                txtLog.Invoke((Action)(() => AppendLog(message)));
+                txtLog.Invoke((Action)(() => AppendLog(message, color)));
                 return;
             }
 
-            txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
+            // Note: TextBox doesn't support colored text natively
+            // We add color indicators with special characters
+            string prefix = "";
+            if (color == Color.Orange || color == Color.Yellow)
+                prefix = "⚠ ";
+            else if (color == Color.LightGreen)
+                prefix = "✓ ";
+            else if (color == Color.Cyan)
+                prefix = "💾 ";
+            else if (color == Color.Red)
+                prefix = "❌ ";
+
+            txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {prefix}{message}{Environment.NewLine}");
+
+            // Auto-scroll to bottom
+            txtLog.SelectionStart = txtLog.Text.Length;
+            txtLog.ScrollToCaret();
         }
 
         private void UpdateChart()
@@ -411,6 +466,7 @@ namespace checkers_neural_network
             int offsetX = 30;
             int offsetY = 20;
 
+            // Draw axes
             g.DrawLine(Pens.Black, offsetX, height + offsetY, width + offsetX, height + offsetY);
             g.DrawLine(Pens.Black, offsetX, offsetY, offsetX, height + offsetY);
 
@@ -421,6 +477,7 @@ namespace checkers_neural_network
             double range = maxFitness - minFitness;
             if (range < 1) range = 1;
 
+            // Draw best fitness line (blue)
             Pen bestPen = new Pen(Color.Blue, 2);
             for (int i = 0; i < fitnessHistory.Count - 1; i++)
             {
@@ -432,6 +489,7 @@ namespace checkers_neural_network
                 g.DrawLine(bestPen, x1, y1, x2, y2);
             }
 
+            // Draw average fitness line (red)
             Pen avgPen = new Pen(Color.Red, 2);
             for (int i = 0; i < avgFitnessHistory.Count - 1; i++)
             {
@@ -443,13 +501,29 @@ namespace checkers_neural_network
                 g.DrawLine(avgPen, x1, y1, x2, y2);
             }
 
+            // Draw legend
             g.FillRectangle(Brushes.Blue, offsetX + width - 100, offsetY, 15, 3);
             g.DrawString("Best", Font, Brushes.Black, offsetX + width - 80, offsetY - 5);
             g.FillRectangle(Brushes.Red, offsetX + width - 100, offsetY + 15, 15, 3);
             g.DrawString("Average", Font, Brushes.Black, offsetX + width - 80, offsetY + 10);
 
+            // Draw axis labels
             g.DrawString($"Max: {maxFitness:F1}", Font, Brushes.Black, offsetX - 25, offsetY - 5);
             g.DrawString($"Min: {minFitness:F1}", Font, Brushes.Black, offsetX - 25, height + offsetY - 10);
+
+            // ✨ IMPROVED: Show current generation
+            g.DrawString($"Gen: {fitnessHistory.Count}", Font, Brushes.Black, width + offsetX - 50, height + offsetY + 5);
+        }
+
+        private void InitializeComponent()
+        {
+            this.SuspendLayout();
+            // 
+            // TrainingForm
+            // 
+            this.ClientSize = new System.Drawing.Size(900, 710);
+            this.Name = "TrainingForm";
+            this.ResumeLayout(false);
         }
     }
 }

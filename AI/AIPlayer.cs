@@ -2,6 +2,7 @@
 using checkers_neural_network.AI;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace checkers_neural_network
 {
@@ -91,7 +92,9 @@ namespace checkers_neural_network
             double strategicScore = EvaluateStrategy(board, simBoard, move, color);
             double tacticalScore = EvaluateTactics(simBoard, color);
 
-            return neuralScore + strategicScore * 0.15 + tacticalScore * 0.1;
+            double formationScore = EvaluateFormation(simBoard, color);
+
+            return neuralScore + strategicScore * 0.15 + tacticalScore * 0.1 + formationScore * 0.08;
         }
 
         #endregion
@@ -242,7 +245,7 @@ namespace checkers_neural_network
             if (move.IsJump) value += 0.5;
 
             // 7. Endgame bonus
-            value += EvaluateEndgame(originalBoard, move, color);
+            value += EvaluateEndgame(originalBoard, afterMove, move, color);
 
             return value;
         }
@@ -283,13 +286,55 @@ namespace checkers_neural_network
             return IsPositionThreatened(afterMove, move.To, color) ? -0.8 : 0.0;
         }
 
-        private double EvaluateEndgame(Board board, Move move, PieceColor color)
+        /// <summary>
+        /// ✨ IMPROVED: Better endgame evaluation with aggressive/defensive play
+        /// </summary>
+        private double EvaluateEndgame(Board originalBoard, Board afterMove, Move move, PieceColor color)
         {
             PieceColor opponent = color == PieceColor.Red ? PieceColor.Black : PieceColor.Red;
-            int totalPieces = board.GetAllPieces(color).Count + board.GetAllPieces(opponent).Count;
+            int ourPieces = afterMove.GetAllPieces(color).Count;
+            int theirPieces = afterMove.GetAllPieces(opponent).Count;
+            int totalPieces = ourPieces + theirPieces;
+
+            if (totalPieces > 6) return 0.0; // Not endgame yet
+
+            double value = 0.0;
 
             // In endgame, centralization matters more
-            return totalPieces <= 6 ? GetCenterControlValue(move.To) * 0.8 : 0.0;
+            value += GetCenterControlValue(move.To) * 0.8;
+
+            // If ahead in material, be aggressive (push toward enemy)
+            if (ourPieces > theirPieces)
+            {
+                double minDistance = double.MaxValue;
+                foreach (var enemyPiece in afterMove.GetAllPieces(opponent))
+                {
+                    double dist = Math.Abs(move.To.Row - enemyPiece.Position.Row) +
+                                 Math.Abs(move.To.Col - enemyPiece.Position.Col);
+                    minDistance = Math.Min(minDistance, dist);
+                }
+                value += (10 - minDistance) * 0.15; // Closer to enemy = better
+            }
+            // If behind, try to stay mobile and create threats
+            else if (ourPieces < theirPieces)
+            {
+                MoveValidator validator = GetOrCreateValidator(afterMove);
+                Piece movedPiece = afterMove.GetPiece(move.To);
+                if (movedPiece != null)
+                {
+                    int mobilityAfter = validator.GetValidMoves(movedPiece).Count;
+                    value += mobilityAfter * 0.2; // Stay mobile when behind
+                }
+            }
+
+            // King activity is crucial in endgame
+            Piece piece = afterMove.GetPiece(move.To);
+            if (piece?.Type == PieceType.King)
+            {
+                value += 0.5; // Kings are extra valuable in endgame
+            }
+
+            return value;
         }
 
         #endregion
@@ -322,6 +367,113 @@ namespace checkers_neural_network
 
         #endregion
 
+        #region Formation Evaluation
+
+        /// <summary>
+        /// ✨ NEW: Evaluates piece formations and structure
+        /// Awards points for:
+        /// - Connected pieces (diagonal support)
+        /// - Back row integrity  
+        /// - Advanced pieces with support
+        /// - Piece density (avoiding spreading too thin)
+        /// </summary>
+        private double EvaluateFormation(Board board, PieceColor color)
+        {
+            double value = 0.0;
+            var pieces = board.GetAllPieces(color);
+
+            if (pieces.Count == 0) return 0.0;
+
+            // 1. Connected pieces (pieces that protect each other)
+            int connectedPairs = 0;
+            foreach (var piece in pieces)
+            {
+                foreach (var other in pieces)
+                {
+                    if (piece.Position == other.Position) continue;
+
+                    int rowDiff = Math.Abs(other.Position.Row - piece.Position.Row);
+                    int colDiff = Math.Abs(other.Position.Col - piece.Position.Col);
+
+                    // Adjacent diagonal = mutual protection
+                    if (rowDiff == 1 && colDiff == 1)
+                    {
+                        connectedPairs++;
+                    }
+                }
+            }
+            value += (connectedPairs / 2.0) * 0.3; // Divide by 2 (we count each pair twice)
+
+            // 2. Back row integrity (maintaining home row defense)
+            int backRow = color == PieceColor.Red ? 7 : 0;
+            int backRowPieces = pieces.Count(p => p.Position.Row == backRow && p.Type == PieceType.Regular);
+
+            // Only bonus if we still have many pieces (early/mid game)
+            if (pieces.Count >= 6)
+            {
+                value += backRowPieces * 0.4;
+            }
+
+            // 3. Advanced pieces with support
+            foreach (var piece in pieces)
+            {
+                bool isAdvanced = (color == PieceColor.Red && piece.Position.Row < 4) ||
+                                 (color == PieceColor.Black && piece.Position.Row > 3);
+
+                if (isAdvanced && piece.Type == PieceType.Regular)
+                {
+                    // Check if this advanced piece has support behind it
+                    bool hasSupport = false;
+                    int supportRow = color == PieceColor.Red ? piece.Position.Row + 1 : piece.Position.Row - 1;
+
+                    foreach (var supporter in pieces)
+                    {
+                        if (supporter.Position.Row == supportRow)
+                        {
+                            int colDiff = Math.Abs(supporter.Position.Col - piece.Position.Col);
+                            if (colDiff == 1)
+                            {
+                                hasSupport = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (hasSupport)
+                    {
+                        value += 0.5; // Supported advance is valuable
+                    }
+                }
+            }
+
+            // 4. Piece density (avoid spreading too thin)
+            if (pieces.Count >= 4)
+            {
+                double avgRow = pieces.Average(p => p.Position.Row);
+                double avgCol = pieces.Average(p => p.Position.Col);
+
+                double totalDistance = 0;
+                foreach (var piece in pieces)
+                {
+                    double dist = Math.Sqrt(
+                        Math.Pow(piece.Position.Row - avgRow, 2) +
+                        Math.Pow(piece.Position.Col - avgCol, 2)
+                    );
+                    totalDistance += dist;
+                }
+
+                double avgDistance = totalDistance / pieces.Count;
+                // Reward tighter formations (up to a point)
+                if (avgDistance < 2.5)
+                {
+                    value += (2.5 - avgDistance) * 0.2;
+                }
+            }
+
+            return value;
+        }
+
+        #endregion
         #region Material & Mobility
 
         private double GetMaterialBalance(Board board, PieceColor color)
@@ -474,34 +626,57 @@ namespace checkers_neural_network
             }
         }
 
+   
         public void CalculateFitness()
         {
             double fitness = 0.0;
+            int gamesPlayed = Stats.GamesPlayed;
 
-            // Win/loss record
-            fitness += Stats.Wins * 100.0;
-            fitness -= Stats.Losses * 50.0;
-            fitness += Stats.Draws * 25.0;
+            if (gamesPlayed == 0)
+            {
+                Brain.Fitness = 0.0;
+                return;
+            }
 
-            // Capture efficiency
+            // 1. Win/Loss/Draw Rates - ADAPTIVE WEIGHT (most important)
+            double winRate = (double)Stats.Wins / gamesPlayed;
+            double lossRate = (double)Stats.Losses / gamesPlayed;
+            double drawRate = (double)Stats.Draws / gamesPlayed;
+
+            // Adaptive: Start conservative (400), grow to aggressive (1000)
+            // This prevents premature convergence while maintaining strong selection
+            double experienceMultiplier = Math.Min(1.0, gamesPlayed / 20.0);  // Caps at 20 games
+            double winRateWeight = 400 + (600 * experienceMultiplier);  // 400 → 1000
+
+            fitness += winRate * winRateWeight;                    // Win rate: 0-1000 points
+            fitness -= lossRate * (winRateWeight * 0.5);          // Loss penalty: 0-500 points
+            fitness -= drawRate * (winRateWeight * 0.15);         // Draw penalty: 0-150 points
+
+            // 2. Material Management (secondary - up to 100 points)
+            double materialBalance = Stats.PiecesCaptured - Stats.PiecesLost;
+            fitness += materialBalance * 5.0;  // Each piece difference = 5 points
+
+            // 3. King Management (up to 120 points)
+            fitness += Stats.KingsMade * 10.0;         // Making kings: valuable
+            fitness += Stats.KingsCaptured * 20.0;     // Capturing enemy kings: very valuable
+            fitness -= Stats.KingsLost * 25.0;         // Losing kings: very bad
+
+            // 4. Capture Efficiency (up to ~50 points)
             if (Stats.TotalMoves > 0)
             {
-                double captureRatio = (double)Stats.PiecesCaptured / Stats.TotalMoves;
-                fitness += captureRatio * 50.0;
+                double captureRate = (double)Stats.PiecesCaptured / Stats.TotalMoves;
+                fitness += captureRate * 200.0;  // Naturally capped by rate (0-1)
             }
 
-            // Survival rate
-            if (Stats.GamesPlayed > 0)
+            // 5. Survival Rate (up to 50 points)
+            double maxPiecesLostPerGame = gamesPlayed * 12;
+            if (maxPiecesLostPerGame > 0)
             {
-                double survivalRate = 1.0 - ((double)Stats.PiecesLost / (Stats.GamesPlayed * 12));
-                fitness += survivalRate * 30.0;
+                double survivalRate = 1.0 - ((double)Stats.PiecesLost / maxPiecesLostPerGame);
+                fitness += survivalRate * 50.0;
             }
 
-            // King management
-            fitness += Stats.KingsMade * 15.0;
-            fitness += Stats.KingsCaptured * 20.0;
-            fitness -= Stats.KingsLost * 25.0;
-
+            // Ensure non-negative
             Brain.Fitness = Math.Max(0, fitness);
         }
 
